@@ -1,7 +1,17 @@
-name: Build Multi-Arch Images & Upload Artifacts
+name: 手动构建多构架 Docker Images
 
 on:
-   workflow_dispatch:
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: '选择要构建的架构（可多选）'
+        required: true
+        type: choice
+        options:
+          - amd64
+          - arm64
+          - armv7
+        default: arm64
 
 jobs:
   build:
@@ -9,6 +19,10 @@ jobs:
     permissions:
       contents: read
       packages: write
+
+    strategy:
+      matrix:
+        platform: ${{ fromJson(inputs.platforms == '' && '["arm64"]' || format('["{0}"]', inputs.platforms)) }}
 
     steps:
     - uses: actions/checkout@v4
@@ -26,62 +40,77 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Build & Push Master
+    # ====================== Master Service ======================
+    - name: Build & Push Master (${{ matrix.platform }})
       uses: docker/build-push-action@v5
       with:
         context: .
         file: Dockerfile.master
-        platforms: linux/amd64,linux/arm64
+        platforms: linux/${{ matrix.platform }}
         push: true
-        tags: ghcr.io/${{ github.repository }}-master:latest
+        tags: ghcr.io/${{ github.repository }}-master:${{ matrix.platform }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
 
-    - name: Save & Upload Master Artifact
+    - name: Save Master Image as Artifact (${{ matrix.platform }})
       run: |
-        docker save ghcr.io/${{ github.repository }}-master:latest -o hlds-master.tar
-      - uses: actions/upload-artifact@v4
-        with:
-          name: hlds-master
-          path: hlds-master.tar
-          retention-days: 30  # 保留 30 天
+        IMAGE_NAME="ghcr.io/${{ github.repository }}-master:${{ matrix.platform }}"
+        docker pull $IMAGE_NAME
+        docker save $IMAGE_NAME -o hlds-master-${{ matrix.platform }}.tar
 
-    - name: Build & Push API
+    - name: Upload Master Artifact (${{ matrix.platform }})
+      uses: actions/upload-artifact@v4
+      with:
+        name: hlds-master-${{ matrix.platform }}
+        path: hlds-master-${{ matrix.platform }}.tar
+        retention-days: 30
+
+    # ====================== API Service ======================
+    - name: Build & Push API (${{ matrix.platform }})
       uses: docker/build-push-action@v5
       with:
         context: .
         file: Dockerfile.api
-        platforms: linux/amd64,linux/arm64
+        platforms: linux/${{ matrix.platform }}
         push: true
-        tags: ghcr.io/${{ github.repository }}-api:latest
+        tags: ghcr.io/${{ github.repository }}-api:${{ matrix.platform }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
 
-    - name: Save & Upload API Artifact
+    - name: Save API Image as Artifact (${{ matrix.platform }})
       run: |
-        docker save ghcr.io/${{ github.repository }}-api:latest -o hlds-api.tar
-      - uses: actions/upload-artifact@v4
-        with:
-          name: hlds-api
-          path: hlds-api.tar
-          retention-days: 30  # 保留 30 天
+        IMAGE_NAME="ghcr.io/${{ github.repository }}-api:${{ matrix.platform }}"
+        docker pull $IMAGE_NAME
+        docker save $IMAGE_NAME -o hlds-api-${{ matrix.platform }}.tar
 
-    - name: Build & Push Web
+    - name: Upload API Artifact (${{ matrix.platform }})
+      uses: actions/upload-artifact@v4
+      with:
+        name: hlds-api-${{ matrix.platform }}
+        path: hlds-api-${{ matrix.platform }}.tar
+        retention-days: 30
+
+    # ====================== Web Service ======================
+    - name: Build & Push Web (${{ matrix.platform }})
       uses: docker/build-push-action@v5
       with:
         context: ./web
         file: ./web/Dockerfile
-        platforms: linux/amd64,linux/arm64
+        platforms: linux/${{ matrix.platform }}
         push: true
-        tags: ghcr.io/${{ github.repository }}-web:latest
+        tags: ghcr.io/${{ github.repository }}-web:${{ matrix.platform }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
 
-    - name: Save & Upload Web Artifact
+    - name: Save Web Image as Artifact (${{ matrix.platform }})
       run: |
-        docker save ghcr.io/${{ github.repository }}-web:latest -o hlds-web.tar
-      - uses: actions/upload-artifact@v4
-        with:
-          name: hlds-web
-          path: hlds-web.tar
-          retention-days: 30  # 保留 30 天
+        IMAGE_NAME="ghcr.io/${{ github.repository }}-web:${{ matrix.platform }}"
+        docker pull $IMAGE_NAME
+        docker save $IMAGE_NAME -o hlds-web-${{ matrix.platform }}.tar
+
+    - name: Upload Web Artifact (${{ matrix.platform }})
+      uses: actions/upload-artifact@v4
+      with:
+        name: hlds-web-${{ matrix.platform }}
+        path: hlds-web-${{ matrix.platform }}.tar
+        retention-days: 30
