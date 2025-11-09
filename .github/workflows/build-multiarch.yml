@@ -1,10 +1,7 @@
 name: Build Multi-Arch Images & Upload Artifacts
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+   workflow_dispatch:
 
 jobs:
   build:
