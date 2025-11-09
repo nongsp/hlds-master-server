@@ -1,17 +1,12 @@
 name: 手动构建多构架 Docker Images
-
 on:
   workflow_dispatch:
     inputs:
       platforms:
-        description: '选择要构建的架构（可多选）'
+        description: '选择要构建的架构（可多选，用逗号分隔）'
         required: true
-        type: choice
-        options:
-          - amd64
-          - arm64
-          - armv7
-        default: arm64
+        type: string
+        default: 'arm64'
 
 jobs:
   build:
@@ -22,7 +17,7 @@ jobs:
 
     strategy:
       matrix:
-        platform: ${{ fromJson(inputs.platforms == '' && '["arm64"]' || format('["{0}"]', inputs.platforms)) }}
+        platform: ${{ fromJson(format('["{0}"]', join(fromJson(concat('["', replace(inputs.platforms, ',', '","'), '"]')), ',')) }}  # 支持多选
 
     steps:
     - uses: actions/checkout@v4
@@ -48,15 +43,20 @@ jobs:
         file: Dockerfile.master
         platforms: linux/${{ matrix.platform }}
         push: true
-        tags: ghcr.io/${{ github.repository }}-master:${{ matrix.platform }}
+        tags: ghcr.io/${{ github.repository }}-master:${{ matrix.platform }},ghcr.io/${{ github.repository }}-master:latest  # 添加 :latest 标签
         cache-from: type=gha
         cache-to: type=gha,mode=max
+        # 可选：--load 加载到本地（加速 pull）
+        outputs: type=image,push=true
 
     - name: Save Master Image as Artifact (${{ matrix.platform }})
       run: |
+        PLATFORM="linux/${{ matrix.platform }}"
         IMAGE_NAME="ghcr.io/${{ github.repository }}-master:${{ matrix.platform }}"
-        docker pull $IMAGE_NAME
+        # 强制指定平台拉取（修复 no matching manifest 错误）
+        docker pull --platform $PLATFORM $IMAGE_NAME || { echo "Pull failed for $IMAGE_NAME"; exit 1; }
         docker save $IMAGE_NAME -o hlds-master-${{ matrix.platform }}.tar
+        echo "Saved: hlds-master-${{ matrix.platform }}.tar ($(du -h hlds-master-${{ matrix.platform }}.tar | cut -f1))"
 
     - name: Upload Master Artifact (${{ matrix.platform }})
       uses: actions/upload-artifact@v4
@@ -73,15 +73,18 @@ jobs:
         file: Dockerfile.api
         platforms: linux/${{ matrix.platform }}
         push: true
-        tags: ghcr.io/${{ github.repository }}-api:${{ matrix.platform }}
+        tags: ghcr.io/${{ github.repository }}-api:${{ matrix.platform }},ghcr.io/${{ github.repository }}-api:latest
         cache-from: type=gha
         cache-to: type=gha,mode=max
+        outputs: type=image,push=true
 
     - name: Save API Image as Artifact (${{ matrix.platform }})
       run: |
+        PLATFORM="linux/${{ matrix.platform }}"
         IMAGE_NAME="ghcr.io/${{ github.repository }}-api:${{ matrix.platform }}"
-        docker pull $IMAGE_NAME
+        docker pull --platform $PLATFORM $IMAGE_NAME || { echo "Pull failed for $IMAGE_NAME"; exit 1; }
         docker save $IMAGE_NAME -o hlds-api-${{ matrix.platform }}.tar
+        echo "Saved: hlds-api-${{ matrix.platform }}.tar ($(du -h hlds-api-${{ matrix.platform }}.tar | cut -f1))"
 
     - name: Upload API Artifact (${{ matrix.platform }})
       uses: actions/upload-artifact@v4
@@ -98,15 +101,18 @@ jobs:
         file: ./web/Dockerfile
         platforms: linux/${{ matrix.platform }}
         push: true
-        tags: ghcr.io/${{ github.repository }}-web:${{ matrix.platform }}
+        tags: ghcr.io/${{ github.repository }}-web:${{ matrix.platform }},ghcr.io/${{ github.repository }}-web:latest
         cache-from: type=gha
         cache-to: type=gha,mode=max
+        outputs: type=image,push=true
 
     - name: Save Web Image as Artifact (${{ matrix.platform }})
       run: |
+        PLATFORM="linux/${{ matrix.platform }}"
         IMAGE_NAME="ghcr.io/${{ github.repository }}-web:${{ matrix.platform }}"
-        docker pull $IMAGE_NAME
+        docker pull --platform $PLATFORM $IMAGE_NAME || { echo "Pull failed for $IMAGE_NAME"; exit 1; }
         docker save $IMAGE_NAME -o hlds-web-${{ matrix.platform }}.tar
+        echo "Saved: hlds-web-${{ matrix.platform }}.tar ($(du -h hlds-web-${{ matrix.platform }}.tar | cut -f1))"
 
     - name: Upload Web Artifact (${{ matrix.platform }})
       uses: actions/upload-artifact@v4
