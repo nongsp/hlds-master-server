@@ -1,4 +1,5 @@
-name: 手动构建多构架 Docker Images
+name: Manual Build Multi-Arch Docker Images
+
 on:
   workflow_dispatch:
     inputs:
