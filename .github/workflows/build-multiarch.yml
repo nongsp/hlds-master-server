@@ -9,7 +9,7 @@ on:
         type: string
         default: 'arm64'
 
-# 第一步：解析输入，生成矩阵
+# 第一步：解析输入，生成单行 JSON 矩阵
 jobs:
   parse-platforms:
     runs-on: ubuntu-latest
@@ -18,11 +18,16 @@ jobs:
     steps:
       - id: set-matrix
         run: |
-          PLATFORMS="${{ inputs.platforms }}"
-          # 清理空格，拆分为数组
-          CLEANED=$(echo "$PLATFORMS" | tr -d ' ' | tr ',' '\n' | grep -v '^$' | jq -R . | jq -s .)
-          echo "matrix=$CLEANED" >> $GITHUB_OUTPUT
-          echo "Parsed platforms: $CLEANED"
+          PLATFORMS="${{ github.event.inputs.platforms || 'arm64' }}"  # fallback
+          # 清理空格，拆分，过滤空值
+          CLEANED=$(echo "$PLATFORMS" | tr -d ' ' | tr ',' '\n' | grep -v '^$' | jq -R . | jq -s 'map(select(. != ""))')
+          # 关键修复：用 jq -c 生成单行压缩 JSON
+          COMPACT=$(echo "$CLEANED" | jq -c .)
+          if [ "$COMPACT" = "[]" ]; then
+            COMPACT='["arm64"]'  # 避免空数组
+          fi
+          echo "matrix=$COMPACT" >> $GITHUB_OUTPUT
+          echo "Parsed platforms (compact): $COMPACT"
 
   # 第二步：使用解析后的矩阵构建
   build:
@@ -33,7 +38,7 @@ jobs:
       packages: write
     strategy:
       matrix:
-        platform: ${{ fromJson(needs.parse-platforms.outputs.matrix) }}
+        platform: ${{ fromJson(needs.parse-platforms.outputs.matrix) }}  # 现在是单行 JSON，解析成功
     steps:
       - uses: actions/checkout@v4
 
@@ -58,14 +63,15 @@ jobs:
           file: Dockerfile.master
           platforms: linux/${{ matrix.platform }}
           push: true
-          tags: ghcr.io/${{ github.repository }}-master:${{ matrix.platform }}
+          tags: ghcr.io/${{ github.repository }}-master:${{ matrix.platform }},ghcr.io/${{ github.repository }}-master:latest
 
       - name: Save & Upload Master Artifact
         run: |
           IMAGE="ghcr.io/${{ github.repository }}-master:${{ matrix.platform }}"
-          docker pull --platform linux/${{ matrix.platform }} $IMAGE
+          PLATFORM="linux/${{ matrix.platform }}"
+          docker pull --platform $PLATFORM $IMAGE || { echo "Pull failed for $IMAGE"; exit 1; }
           docker save $IMAGE -o hlds-master-${{ matrix.platform }}.tar
-          echo "Artifact: hlds-master-${{ matrix.platform }}.tar"
+          echo "Saved: hlds-master-${{ matrix.platform }}.tar ($(du -h hlds-master-${{ matrix.platform }}.tar | cut -f1))"
 
       - name: Upload Master Artifact
         uses: actions/upload-artifact@v4
@@ -82,13 +88,15 @@ jobs:
           file: Dockerfile.api
           platforms: linux/${{ matrix.platform }}
           push: true
-          tags: ghcr.io/${{ github.repository }}-api:${{ matrix.platform }}
+          tags: ghcr.io/${{ github.repository }}-api:${{ matrix.platform }},ghcr.io/${{ github.repository }}-api:latest
 
       - name: Save & Upload API Artifact
         run: |
           IMAGE="ghcr.io/${{ github.repository }}-api:${{ matrix.platform }}"
-          docker pull --platform linux/${{ matrix.platform }} $IMAGE
+          PLATFORM="linux/${{ matrix.platform }}"
+          docker pull --platform $PLATFORM $IMAGE || { echo "Pull failed for $IMAGE"; exit 1; }
           docker save $IMAGE -o hlds-api-${{ matrix.platform }}.tar
+          echo "Saved: hlds-api-${{ matrix.platform }}.tar ($(du -h hlds-api-${{ matrix.platform }}.tar | cut -f1))"
 
       - name: Upload API Artifact
         uses: actions/upload-artifact@v4
@@ -105,13 +113,15 @@ jobs:
           file: ./web/Dockerfile
           platforms: linux/${{ matrix.platform }}
           push: true
-          tags: ghcr.io/${{ github.repository }}-web:${{ matrix.platform }}
+          tags: ghcr.io/${{ github.repository }}-web:${{ matrix.platform }},ghcr.io/${{ github.repository }}-web:latest
 
       - name: Save & Upload Web Artifact
         run: |
           IMAGE="ghcr.io/${{ github.repository }}-web:${{ matrix.platform }}"
-          docker pull --platform linux/${{ matrix.platform }} $IMAGE
+          PLATFORM="linux/${{ matrix.platform }}"
+          docker pull --platform $PLATFORM $IMAGE || { echo "Pull failed for $IMAGE"; exit 1; }
           docker save $IMAGE -o hlds-web-${{ matrix.platform }}.tar
+          echo "Saved: hlds-web-${{ matrix.platform }}.tar ($(du -h hlds-web-${{ matrix.platform }}.tar | cut -f1))"
 
       - name: Upload Web Artifact
         uses: actions/upload-artifact@v4
