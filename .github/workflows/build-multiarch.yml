@@ -1,4 +1,4 @@
-name: Build Multi-Arch Images
+name: Build Multi-Arch Images & Upload Artifacts
 
 on:
   push:
@@ -37,6 +37,17 @@ jobs:
         platforms: linux/amd64,linux/arm64
         push: true
         tags: ghcr.io/${{ github.repository }}-master:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Save & Upload Master Artifact
+      run: |
+        docker save ghcr.io/${{ github.repository }}-master:latest -o hlds-master.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hlds-master
+          path: hlds-master.tar
+          retention-days: 30  # 保留 30 天
 
     - name: Build & Push API
       uses: docker/build-push-action@v5
@@ -46,6 +57,17 @@ jobs:
         platforms: linux/amd64,linux/arm64
         push: true
         tags: ghcr.io/${{ github.repository }}-api:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Save & Upload API Artifact
+      run: |
+        docker save ghcr.io/${{ github.repository }}-api:latest -o hlds-api.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hlds-api
+          path: hlds-api.tar
+          retention-days: 30  # 保留 30 天
 
     - name: Build & Push Web
       uses: docker/build-push-action@v5
@@ -55,3 +77,14 @@ jobs:
         platforms: linux/amd64,linux/arm64
         push: true
         tags: ghcr.io/${{ github.repository }}-web:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Save & Upload Web Artifact
+      run: |
+        docker save ghcr.io/${{ github.repository }}-web:latest -o hlds-web.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hlds-web
+          path: hlds-web.tar
+          retention-days: 30  # 保留 30 天
