@@ -1,0 +1,73 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    networks:
+      - hlds-net
+
+  hlds-master:
+    build:
+      context: .
+      dockerfile: Dockerfile.master
+    ports:
+      - "27011:27011/udp"
+    environment:
+      - REDIS_HOST=redis
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - hlds-net
+
+  hlds-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_HOST=redis
+      - JWT_SECRET=your-super-secret-jwt-key-change-me
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - hlds-net
+
+  hlds-web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      - hlds-api
+    restart: unless-stopped
+    networks:
+      - hlds-net
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    restart: unless-stopped
+    networks:
+      - hlds-net
+
+volumes:
+  redis-data:
+
+networks:
+  hlds-net:
+    driver: bridge
