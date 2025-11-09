@@ -3,9 +3,9 @@ on:
   workflow_dispatch:
     inputs:
       platforms:
-        description: '选择要构建的架构（可多选，用逗号分隔）'
+        description: '选择要构建的架构（多选用逗号分隔，如 arm64,amd64,armv7）'
         required: true
-        type: string
+        type: string  # 修复：改成 string，支持多选
         default: 'arm64'
 
 jobs:
@@ -14,10 +14,15 @@ jobs:
     permissions:
       contents: read
       packages: write
+    # 修复：添加 concurrency，避免并发冲突
+    concurrency:
+      group: build-${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: true
 
+    # 修复：正确解析字符串输入为矩阵数组
     strategy:
       matrix:
-        platform: ${{ fromJson(format('["{0}"]', join(fromJson(concat('["', replace(inputs.platforms, ',', '","'), '"]')), ',')) }}  # 支持多选
+        platform: ${{ fromJson(format('["{0}"]', join(split(github.event.inputs.platforms || 'arm64', ','), '","'))) }}
 
     steps:
     - uses: actions/checkout@v4
@@ -43,17 +48,16 @@ jobs:
         file: Dockerfile.master
         platforms: linux/${{ matrix.platform }}
         push: true
-        tags: ghcr.io/${{ github.repository }}-master:${{ matrix.platform }},ghcr.io/${{ github.repository }}-master:latest  # 添加 :latest 标签
+        tags: ghcr.io/${{ github.repository }}-master:${{ matrix.platform }},ghcr.io/${{ github.repository }}-master:latest
         cache-from: type=gha
         cache-to: type=gha,mode=max
-        # 可选：--load 加载到本地（加速 pull）
         outputs: type=image,push=true
 
     - name: Save Master Image as Artifact (${{ matrix.platform }})
       run: |
         PLATFORM="linux/${{ matrix.platform }}"
         IMAGE_NAME="ghcr.io/${{ github.repository }}-master:${{ matrix.platform }}"
-        # 强制指定平台拉取（修复 no matching manifest 错误）
+        echo "Pulling $IMAGE_NAME for platform $PLATFORM..."
         docker pull --platform $PLATFORM $IMAGE_NAME || { echo "Pull failed for $IMAGE_NAME"; exit 1; }
         docker save $IMAGE_NAME -o hlds-master-${{ matrix.platform }}.tar
         echo "Saved: hlds-master-${{ matrix.platform }}.tar ($(du -h hlds-master-${{ matrix.platform }}.tar | cut -f1))"
@@ -82,6 +86,7 @@ jobs:
       run: |
         PLATFORM="linux/${{ matrix.platform }}"
         IMAGE_NAME="ghcr.io/${{ github.repository }}-api:${{ matrix.platform }}"
+        echo "Pulling $IMAGE_NAME for platform $PLATFORM..."
         docker pull --platform $PLATFORM $IMAGE_NAME || { echo "Pull failed for $IMAGE_NAME"; exit 1; }
         docker save $IMAGE_NAME -o hlds-api-${{ matrix.platform }}.tar
         echo "Saved: hlds-api-${{ matrix.platform }}.tar ($(du -h hlds-api-${{ matrix.platform }}.tar | cut -f1))"
@@ -110,6 +115,7 @@ jobs:
       run: |
         PLATFORM="linux/${{ matrix.platform }}"
         IMAGE_NAME="ghcr.io/${{ github.repository }}-web:${{ matrix.platform }}"
+        echo "Pulling $IMAGE_NAME for platform $PLATFORM..."
         docker pull --platform $PLATFORM $IMAGE_NAME || { echo "Pull failed for $IMAGE_NAME"; exit 1; }
         docker save $IMAGE_NAME -o hlds-web-${{ matrix.platform }}.tar
         echo "Saved: hlds-web-${{ matrix.platform }}.tar ($(du -h hlds-web-${{ matrix.platform }}.tar | cut -f1))"
