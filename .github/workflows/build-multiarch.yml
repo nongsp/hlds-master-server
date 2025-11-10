@@ -1,4 +1,4 @@
-name: Manual Build Multi-Arch Docker Images (amd64 Native)
+name: Manual Build Multi-Arch Docker Images
 
 on:
   workflow_dispatch:
@@ -7,39 +7,26 @@ on:
         description: '输入架构（多选用逗号分隔，如 amd64,arm64,armv7）'
         required: true
         type: string
-        default: 'amd64,arm64,armv7'
+        default: 'amd64,arm64,armv7'  # 默认全架构
 
 jobs:
-  parse-platforms:
-    runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
-    steps:
-      - id: set-matrix
-        run: |
-          PLATFORMS="${{ github.event.inputs.platforms || 'amd64' }}"
-          CLEANED=$(echo "$PLATFORMS" | tr -d ' ' | tr ',' '\n' | grep -v '^$' | jq -R . | jq -s 'map(select(. != ""))')
-          COMPACT=$(echo "$CLEANED" | jq -c .)
-          if [ "$COMPACT" = "[]" ]; then COMPACT='["amd64"]'; fi
-          echo "matrix=$COMPACT" >> $GITHUB_OUTPUT
-          echo "Parsed: $COMPACT"
-
   build:
-    needs: parse-platforms
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    # 简化：固定矩阵 + 条件过滤（避免 fromJson 坑）
     strategy:
       matrix:
-        platform: ${{ fromJson(needs.parse-platforms.outputs.matrix) }}
+        include:
+          - platform: amd64
+          - platform: arm64
+          - platform: armv7
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up QEMU (for arm emulation)
+      - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
-        with:
-          platforms: linux/amd64,linux/arm64,linux/arm/v7
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -51,8 +38,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Master
+      # 过滤：只构建选中的平台
+      - name: Check if platform is selected
+        id: check-platform
+        run: |
+          SELECTED='${{ github.event.inputs.platforms }}'
+          if [[ ! "$SELECTED" =~ "${{ matrix.platform }}" ]]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+          fi
+
       - name: Build & Push Master (${{ matrix.platform }})
+        if: steps.check-platform.outputs.skip != 'true'
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -60,10 +56,9 @@ jobs:
           platforms: linux/${{ matrix.platform }}
           push: true
           tags: ghcr.io/${{ github.repository }}-master:${{ matrix.platform }},ghcr.io/${{ github.repository }}-master:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       - name: Save & Upload Master Artifact
+        if: steps.check-platform.outputs.skip != 'true'
         run: |
           IMAGE="ghcr.io/${{ github.repository }}-master:${{ matrix.platform }}"
           docker pull --platform linux/${{ matrix.platform }} $IMAGE
@@ -74,8 +69,9 @@ jobs:
             path: hlds-master-${{ matrix.platform }}.tar
             retention-days: 30
 
-      # API
+      # API (类似)
       - name: Build & Push API (${{ matrix.platform }})
+        if: steps.check-platform.outputs.skip != 'true'
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -83,10 +79,9 @@ jobs:
           platforms: linux/${{ matrix.platform }}
           push: true
           tags: ghcr.io/${{ github.repository }}-api:${{ matrix.platform }},ghcr.io/${{ github.repository }}-api:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       - name: Save & Upload API Artifact
+        if: steps.check-platform.outputs.skip != 'true'
         run: |
           IMAGE="ghcr.io/${{ github.repository }}-api:${{ matrix.platform }}"
           docker pull --platform linux/${{ matrix.platform }} $IMAGE
@@ -97,8 +92,9 @@ jobs:
             path: hlds-api-${{ matrix.platform }}.tar
             retention-days: 30
 
-      # Web
+      # Web (类似)
       - name: Build & Push Web (${{ matrix.platform }})
+        if: steps.check-platform.outputs.skip != 'true'
         uses: docker/build-push-action@v5
         with:
           context: ./web
@@ -106,10 +102,9 @@ jobs:
           platforms: linux/${{ matrix.platform }}
           push: true
           tags: ghcr.io/${{ github.repository }}-web:${{ matrix.platform }},ghcr.io/${{ github.repository }}-web:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       - name: Save & Upload Web Artifact
+        if: steps.check-platform.outputs.skip != 'true'
         run: |
           IMAGE="ghcr.io/${{ github.repository }}-web:${{ matrix.platform }}"
           docker pull --platform linux/${{ matrix.platform }} $IMAGE
