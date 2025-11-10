@@ -1,15 +1,14 @@
-name: Manual Build Multi-Arch Docker Images
+name: Manual Build Multi-Arch Docker Images (amd64 Native)
 
 on:
   workflow_dispatch:
     inputs:
       platforms:
-        description: '输入架构（多选用逗号分隔，如 arm64,amd64,armv7）'
+        description: '输入架构（多选用逗号分隔，如 amd64,arm64,armv7）'
         required: true
         type: string
-        default: 'arm64'
+        default: 'amd64,arm64,armv7'
 
-# 第一步：解析输入，生成单行 JSON 矩阵
 jobs:
   parse-platforms:
     runs-on: ubuntu-latest
@@ -18,18 +17,13 @@ jobs:
     steps:
       - id: set-matrix
         run: |
-          PLATFORMS="${{ github.event.inputs.platforms || 'arm64' }}"  # fallback
-          # 清理空格，拆分，过滤空值
+          PLATFORMS="${{ github.event.inputs.platforms || 'amd64' }}"
           CLEANED=$(echo "$PLATFORMS" | tr -d ' ' | tr ',' '\n' | grep -v '^$' | jq -R . | jq -s 'map(select(. != ""))')
-          # 关键修复：用 jq -c 生成单行压缩 JSON
           COMPACT=$(echo "$CLEANED" | jq -c .)
-          if [ "$COMPACT" = "[]" ]; then
-            COMPACT='["arm64"]'  # 避免空数组
-          fi
+          if [ "$COMPACT" = "[]" ]; then COMPACT='["amd64"]'; fi
           echo "matrix=$COMPACT" >> $GITHUB_OUTPUT
-          echo "Parsed platforms (compact): $COMPACT"
+          echo "Parsed: $COMPACT"
 
-  # 第二步：使用解析后的矩阵构建
   build:
     needs: parse-platforms
     runs-on: ubuntu-latest
@@ -38,12 +32,14 @@ jobs:
       packages: write
     strategy:
       matrix:
-        platform: ${{ fromJson(needs.parse-platforms.outputs.matrix) }}  # 现在是单行 JSON，解析成功
+        platform: ${{ fromJson(needs.parse-platforms.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up QEMU
+      - name: Set up QEMU (for arm emulation)
         uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -55,7 +51,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # ====================== Master ======================
+      # Master
       - name: Build & Push Master (${{ matrix.platform }})
         uses: docker/build-push-action@v5
         with:
@@ -64,23 +60,21 @@ jobs:
           platforms: linux/${{ matrix.platform }}
           push: true
           tags: ghcr.io/${{ github.repository }}-master:${{ matrix.platform }},ghcr.io/${{ github.repository }}-master:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Save & Upload Master Artifact
         run: |
           IMAGE="ghcr.io/${{ github.repository }}-master:${{ matrix.platform }}"
-          PLATFORM="linux/${{ matrix.platform }}"
-          docker pull --platform $PLATFORM $IMAGE || { echo "Pull failed for $IMAGE"; exit 1; }
+          docker pull --platform linux/${{ matrix.platform }} $IMAGE
           docker save $IMAGE -o hlds-master-${{ matrix.platform }}.tar
-          echo "Saved: hlds-master-${{ matrix.platform }}.tar ($(du -h hlds-master-${{ matrix.platform }}.tar | cut -f1))"
+        - uses: actions/upload-artifact@v4
+          with:
+            name: hlds-master-${{ matrix.platform }}
+            path: hlds-master-${{ matrix.platform }}.tar
+            retention-days: 30
 
-      - name: Upload Master Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: hlds-master-${{ matrix.platform }}
-          path: hlds-master-${{ matrix.platform }}.tar
-          retention-days: 30
-
-      # ====================== API ======================
+      # API
       - name: Build & Push API (${{ matrix.platform }})
         uses: docker/build-push-action@v5
         with:
@@ -89,23 +83,21 @@ jobs:
           platforms: linux/${{ matrix.platform }}
           push: true
           tags: ghcr.io/${{ github.repository }}-api:${{ matrix.platform }},ghcr.io/${{ github.repository }}-api:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Save & Upload API Artifact
         run: |
           IMAGE="ghcr.io/${{ github.repository }}-api:${{ matrix.platform }}"
-          PLATFORM="linux/${{ matrix.platform }}"
-          docker pull --platform $PLATFORM $IMAGE || { echo "Pull failed for $IMAGE"; exit 1; }
+          docker pull --platform linux/${{ matrix.platform }} $IMAGE
           docker save $IMAGE -o hlds-api-${{ matrix.platform }}.tar
-          echo "Saved: hlds-api-${{ matrix.platform }}.tar ($(du -h hlds-api-${{ matrix.platform }}.tar | cut -f1))"
+        - uses: actions/upload-artifact@v4
+          with:
+            name: hlds-api-${{ matrix.platform }}
+            path: hlds-api-${{ matrix.platform }}.tar
+            retention-days: 30
 
-      - name: Upload API Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: hlds-api-${{ matrix.platform }}
-          path: hlds-api-${{ matrix.platform }}.tar
-          retention-days: 30
-
-      # ====================== Web ======================
+      # Web
       - name: Build & Push Web (${{ matrix.platform }})
         uses: docker/build-push-action@v5
         with:
@@ -114,18 +106,16 @@ jobs:
           platforms: linux/${{ matrix.platform }}
           push: true
           tags: ghcr.io/${{ github.repository }}-web:${{ matrix.platform }},ghcr.io/${{ github.repository }}-web:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Save & Upload Web Artifact
         run: |
           IMAGE="ghcr.io/${{ github.repository }}-web:${{ matrix.platform }}"
-          PLATFORM="linux/${{ matrix.platform }}"
-          docker pull --platform $PLATFORM $IMAGE || { echo "Pull failed for $IMAGE"; exit 1; }
+          docker pull --platform linux/${{ matrix.platform }} $IMAGE
           docker save $IMAGE -o hlds-web-${{ matrix.platform }}.tar
-          echo "Saved: hlds-web-${{ matrix.platform }}.tar ($(du -h hlds-web-${{ matrix.platform }}.tar | cut -f1))"
-
-      - name: Upload Web Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: hlds-web-${{ matrix.platform }}
-          path: hlds-web-${{ matrix.platform }}.tar
-          retention-days: 30
+        - uses: actions/upload-artifact@v4
+          with:
+            name: hlds-web-${{ matrix.platform }}
+            path: hlds-web-${{ matrix.platform }}.tar
+            retention-days: 30
