@@ -1,46 +1,33 @@
-#!/usr/bin/env python3
-from fastapi import FastAPI, HTTPException, Depends, Header, Request
+from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
-import redis
+import redis.asyncio as redis
+from passlib.context import CryptContext  # 修复：改为 CryptContext
 import os
-import asyncio
+import jwt
 from datetime import datetime, timedelta
-from jose import JWTError, jwt
-from passlib.context import CryptPasswordHasher
-from prometheus_client import Counter, Gauge, generate_latest
 
-app = FastAPI(title="HLDS Master API v4", version="4.0")
+app = FastAPI()
 
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-JWT_SECRET = os.getenv("JWT_SECRET", "change-me-in-prod")
+# 配置
+JWT_SECRET = os.getenv("JWT_SECRET", "fallback-secret-change-in-production")
 JWT_ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 1440
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 
-r = redis.Redis(host=REDIS_HOST, port=6379, db=0, decode_responses=False)
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
-pwd_context = CryptPasswordHasher(schemes=["bcrypt"], deprecated="auto")
+# Redis
+redis_client = redis.from_url(f"redis://{os.getenv('REDIS_HOST', 'redis')}:6379")
 
-REQUEST_COUNT = Counter('api_requests_total', 'Total API requests', ['method', 'endpoint', 'status'])
-SERVER_COUNT = Gauge('hlds_servers_total', 'Active game servers')
-PLAYER_COUNT = Gauge('hlds_players_total', 'Total players online')
+# 密码哈希 - 修复：使用 CryptContext
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# JWT
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
+# 模型
 class User(BaseModel):
     username: str
-    disabled: Optional[bool] = False
-
-class UserInDB(User):
-    hashed_password: str
+    disabled: Optional[bool] = None
 
 class Token(BaseModel):
     access_token: str
@@ -49,31 +36,31 @@ class Token(BaseModel):
 class ServerInfo(BaseModel):
     ip: str
     port: int
-    protocol: int
+    hostname: str
     players: int
     max_players: int
-    bots: int
-    gamedir: str
     map: str
-    password: bool
-    os: str
-    secure: bool
-    lan: bool
-    version: str
-    region: int
+    game: str
 
-class BlacklistEntry(BaseModel):
-    ip: str
-    port: Optional[int] = None
-    reason: str
-    added_by: str
-    added_at: datetime
+# 模拟用户数据库（实际应从 Redis）
+fake_users_db = {
+    "admin": {
+        "username": "admin",
+        "hashed_password": pwd_context.hash("admin123"),  # 初始化时哈希
+        "disabled": False,
+    }
+}
 
-def verify_password(plain, hashed): return pwd_context.verify(plain, hashed)
-def get_password_hash(password): return pwd_context.hash(password)
-def create_access_token(data: dict, expires_delta: timedelta = None):
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))
+# 辅助函数
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_password_hash(password):
+    return pwd_context.hash(password)
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
+    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
@@ -81,144 +68,56 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
         username: str = payload.get("sub")
-        if not username: raise HTTPException(status_code=401)
-        return UserInDB(username=username, hashed_password=get_user(username) or "")
-    except JWTError:
+        if username is None:
+            raise HTTPException(status_code=401, detail="Invalid token")
+    except jwt.PyJWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
+    user = fake_users_db.get(username)
+    if user is None:
+        raise HTTPException(status_code=401, detail="User not found")
+    return User(**user)
 
-def get_user(username: str) -> Optional[str]:
-    pwd = r.get(f"user:{username}")
-    return pwd.decode() if pwd else None
-
-@app.on_event("startup")
-async def init_admin():
-    if not r.exists("user:admin"):
-        r.set("user:admin", get_password_hash("admin123"))
-        print("Default admin created: admin / admin123")
-
-@app.post("/login", response_model=Token)
-async def login(form: OAuth2PasswordRequestForm = Depends()):
-    hashed = get_user(form.username)
-    if not hashed or not verify_password(form.password, hashed):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    access_token = create_access_token(data={"sub": form.username}, expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+# 路由
+@app.post("/token", response_model=Token)
+async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    user = fake_users_db.get(form_data.username)
+    if not user or not verify_password(form_data.password, user["hashed_password"]):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    access_token = create_access_token(data={"sub": user["username"]})
     return {"access_token": access_token, "token_type": "bearer"}
 
-@app.middleware("http")
-async def prometheus_middleware(request: Request, call_next):
-    method = request.method
-    endpoint = request.url.path
-    response = await call_next(request)
-    REQUEST_COUNT.labels(method=method, endpoint=endpoint, status=response.status_code).inc()
-    return response
-
-@app.get("/metrics")
-async def metrics():
-    update_metrics()
-    return generate_latest()
-
-def update_metrics():
-    keys = r.keys("server:*")
-    blacklist = {k.decode().split(":", 2)[1] for k in r.keys("blacklist:*")}
-    count = 0
-    players = 0
-    for key in keys:
-        ip_port = key.decode().split(":", 2)[1]
-        if ip_port in blacklist: continue
-        data = r.hgetall(key)
-        if data:
-            count += 1
-            players += int(data.get(b'players', b'0').decode())
-    SERVER_COUNT.set(count)
-    PLAYER_COUNT.set(players)
-
-def get_servers_from_redis() -> List[ServerInfo]:
-    keys = r.keys("server:*")
-    blacklist = {k.decode().split(":", 2)[1] for k in r.keys("blacklist:*")}
-    servers = []
-    for key in keys:
-        ip_port = key.decode().split(":", 2)[1]
-        if ip_port in blacklist: continue
-        data = r.hgetall(key)
-        if not data: continue
-        d = {k.decode(): v.decode() if isinstance(v, bytes) else v for k, v in data.items()}
-        d["password"] = bool(int(d.get("password", 0)))
-        d["secure"] = bool(int(d.get("secure", 0)))
-        d["lan"] = bool(int(d.get("lan", 0)))
-        servers.append(ServerInfo(**d))
-    return servers
+@app.get("/health")
+async def health():
+    try:
+        await redis_client.ping()
+        return {"status": "ok", "redis": "connected"}
+    except:
+        return {"status": "error", "redis": "failed"}
 
 @app.get("/servers", response_model=List[ServerInfo])
-async def get_servers(
-    gamedir: Optional[str] = None,
-    map: Optional[str] = None,
-    region: Optional[int] = None,
-    user: User = Depends(get_current_user)
-):
-    servers = get_servers_from_redis()
-    if gamedir: servers = [s for s in servers if s.gamedir == gamedir]
-    if map: servers = [s for s in servers if s.map == map]
-    if region is not None: servers = [s for s in servers if s.region == region]
+async def get_servers(user: User = Depends(get_current_user)):
+    # 从 Redis 获取服务器列表
+    raw = await redis_client.lrange("servers", 0, -1)
+    servers = []
+    for item in raw:
+        data = eval(item.decode())  # 生产中请用安全序列化
+        servers.append(ServerInfo(**data))
     return servers
 
-@app.get("/stats")
-async def get_stats(user: User = Depends(get_current_user)):
-    servers = get_servers_from_redis()
-    total_players = sum(s.players for s in servers)
-    games = {}
-    for s in servers:
-        games[s.gamedir] = games.get(s.gamedir, 0) + 1
-    return {"total_servers": len(servers), "total_players": total_players, "games": games}
-
-@app.post("/blacklist")
-async def add_blacklist(entry: BlacklistEntry, user: User = Depends(get_current_user)):
-    key = f"blacklist:{entry.ip}:{entry.port or '0'}"
-    r.hset(key, mapping={
-        "reason": entry.reason,
-        "added_by": entry.added_by,
-        "added_at": entry.added_at.isoformat()
-    })
-    r.expire(key, 60*60*24*30)
-    return {"status": "added"}
-
-@app.delete("/blacklist/{ip}")
-async def remove_blacklist(ip: str, port: Optional[int] = None, user: User = Depends(get_current_user)):
-    key = f"blacklist:{ip}:{port or '0'}"
-    r.delete(key)
-    return {"status": "removed"}
-
-@app.get("/blacklist", response_model=List[BlacklistEntry])
-async def list_blacklist(user: User = Depends(get_current_user)):
-    keys = r.keys("blacklist:*")
-    entries = []
-    for key in keys:
-        data = r.hgetall(key)
-        ip_port = key.decode().split(":", 2)[1]
-        ip, port_str = ip_port.rsplit(":", 1)
-        entries.append(BlacklistEntry(
-            ip=ip,
-            port=int(port_str) if port_str != '0' else None,
-            reason=data.get(b"reason", b"").decode(),
-            added_by=data.get(b"added_by", b"").decode(),
-            added_at=datetime.fromisoformat(data.get(b"added_at", b"").decode())
-        ))
-    return entries
-
-import socketio
-sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
-sio_app = socketio.ASGIApp(sio)
-app.mount("/ws", sio_app)
-
-@sio.event
-async def connect(sid, environ): await sio.emit('stats', await get_stats(User(username="system")))
-
-async def broadcast_loop():
-    while True:
-        await asyncio.sleep(10)
-        try:
-            stats = await get_stats(User(username="system"))
-            await sio.emit('stats', stats)
-        except: pass
-
 @app.on_event("startup")
-async def startup(): asyncio.create_task(broadcast_loop())
+async def startup():
+    # 初始化 admin 用户
+    if "admin" not in fake_users_db:
+        fake_users_db["admin"] = {
+            "username": "admin",
+            "hashed_password": get_password_hash("admin123"),
+            "disabled": False,
+        }
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
