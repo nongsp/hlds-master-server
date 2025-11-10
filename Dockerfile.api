@@ -1,11 +1,13 @@
-# Dockerfile.api  (放在项目根目录)
-FROM python:3.12-alpine
+# Dockerfile.api
+FROM python:3.12-slim
+
 WORKDIR /app
-# 1. 先复制 requirements.txt（在 api/ 目录下）
+
 COPY api/requirements.txt .
-# 2. 安装依赖
 RUN pip install --no-cache-dir -r requirements.txt
-# 3. 再复制整个 api 目录
-COPY api/ .
+
+COPY api/main.py .
+
 EXPOSE 8000
+
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
