@@ -3,7 +3,7 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from typing import List, Optional
 import redis.asyncio as redis
-from passlib.context import CryptContext  # 修复：改为 CryptContext
+from passlib.context import CryptContext
 import os
 import jwt
 from datetime import datetime, timedelta
@@ -13,12 +13,12 @@ app = FastAPI()
 # 配置
 JWT_SECRET = os.getenv("JWT_SECRET", "fallback-secret-change-in-production")
 JWT_ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7
 
 # Redis
 redis_client = redis.from_url(f"redis://{os.getenv('REDIS_HOST', 'redis')}:6379")
 
-# 密码哈希 - 修复：使用 CryptContext
+# 密码哈希
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # JWT
@@ -42,14 +42,8 @@ class ServerInfo(BaseModel):
     map: str
     game: str
 
-# 模拟用户数据库（实际应从 Redis）
-fake_users_db = {
-    "admin": {
-        "username": "admin",
-        "hashed_password": pwd_context.hash("admin123"),  # 初始化时哈希
-        "disabled": False,
-    }
-}
+# 用户数据库（延迟初始化）
+fake_users_db = {}
 
 # 辅助函数
 def verify_password(plain_password, hashed_password):
@@ -100,17 +94,16 @@ async def health():
 
 @app.get("/servers", response_model=List[ServerInfo])
 async def get_servers(user: User = Depends(get_current_user)):
-    # 从 Redis 获取服务器列表
     raw = await redis_client.lrange("servers", 0, -1)
     servers = []
     for item in raw:
-        data = eval(item.decode())  # 生产中请用安全序列化
+        data = eval(item.decode())
         servers.append(ServerInfo(**data))
     return servers
 
+# 启动事件：延迟初始化 admin 用户
 @app.on_event("startup")
 async def startup():
-    # 初始化 admin 用户
     if "admin" not in fake_users_db:
         fake_users_db["admin"] = {
             "username": "admin",
