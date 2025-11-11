@@ -9,7 +9,15 @@ import jwt
 from datetime import datetime, timedelta
 
 app = FastAPI()
+from fastapi.middleware.cors import CORSMiddleware
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # 生产改为 ["http://your-domain.com"]
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 # 配置
 JWT_SECRET = os.getenv("JWT_SECRET", "fallback-secret-change-in-production")
 JWT_ALGORITHM = "HS256"
